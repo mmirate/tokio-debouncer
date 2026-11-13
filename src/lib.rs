@@ -241,33 +241,43 @@ impl Debouncer {
     pub async fn ready<'a>(&self) -> DebouncerGuard<'a> {
         // Do not change state here to keep it cancel-safe for use inside select
         loop {
-            let notified = self.inner.notifier.notified();
-            {
+            let action = {
                 let state = self.inner.state.risky_lock();
+
                 if !state.triggered {
-                    drop(state);
-                    notified.await;
-                    continue;
+                    None
+                } else {
+                    let now = Instant::now();
+                    let next_allowed = state.last_run + self.inner.cooldown;
+
+                    match self.inner.mode {
+                        DebounceMode::Leading => {
+                            if !state.has_run || now >= next_allowed {
+                                Some(None)
+                            } else {
+                                Some(Some(next_allowed))
+                            }
+                        }
+                        DebounceMode::Trailing => {
+                            if now >= next_allowed {
+                                Some(None)
+                            } else {
+                                Some(Some(next_allowed))
+                            }
+                        }
+                    }
                 }
-                let now = tokio::time::Instant::now();
-                let next_allowed = state.last_run + self.inner.cooldown;
-                match self.inner.mode {
-                    DebounceMode::Leading => {
-                        if !state.has_run || now >= next_allowed {
-                            break;
-                        } else {
-                            drop(state);
-                            tokio::time::sleep_until(next_allowed).await;
-                        }
-                    }
-                    DebounceMode::Trailing => {
-                        if now >= next_allowed {
-                            break;
-                        } else {
-                            drop(state);
-                            tokio::time::sleep_until(next_allowed).await;
-                        }
-                    }
+            };
+
+            match action {
+                None => {
+                    self.inner.notifier.notified().await;
+                }
+                Some(Some(instant)) => {
+                    tokio::time::sleep_until(instant).await;
+                }
+                Some(None) => {
+                    break;
                 }
             }
         }
