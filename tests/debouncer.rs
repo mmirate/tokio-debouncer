@@ -1,9 +1,8 @@
 // tests/debounce.rs
 
-use tokio_debouncer::Debouncer;
-use tokio_debouncer::DebounceMode;
 use tokio::time::{self, Duration};
-
+use tokio_debouncer::DebounceMode;
+use tokio_debouncer::Debouncer;
 
 #[tokio::test(start_paused = true)]
 async fn leading_runs_immediately_on_first_trigger() {
@@ -11,8 +10,12 @@ async fn leading_runs_immediately_on_first_trigger() {
     let debounce = Debouncer::new(Duration::from_secs(10), DebounceMode::Leading);
     debounce.trigger();
 
-    let _guard = debounce.ready().await;
-    assert!(debounce.is_triggered().await); // should still be triggered until guard is dropped
+    // The guard holds the state lock, so `is_triggered` cannot run until drop.
+    // Drop finalizes and clears the flag.
+    let guard = debounce.ready().await;
+    assert!(guard.is_triggered());
+    drop(guard);
+    assert!(!debounce.is_triggered().await);
 }
 
 #[tokio::test(start_paused = true)]
@@ -21,14 +24,14 @@ async fn leading_respects_cooldown() {
     let debounce = Debouncer::new(Duration::from_secs(10), DebounceMode::Leading);
 
     debounce.trigger();
-    debounce.ready().await; // guard is dropped automatically
+    let _ = debounce.ready().await; // guard is dropped automatically
 
     debounce.trigger();
     time::advance(Duration::from_secs(9)).await;
     let mut yielded = false;
     tokio::select! {
         _ = debounce.ready() => { yielded = true; }
-        _ = time::sleep(Duration::from_millis(999)) => {}
+        () = time::sleep(Duration::from_millis(999)) => {}
     }
     assert!(!yielded, "Should not yield before cooldown");
 
@@ -46,7 +49,7 @@ async fn trailing_yields_after_silence() {
 
     tokio::select! {
         _ = debounce.ready() => { yielded = true; }
-        _ = time::sleep(Duration::from_secs(4)) => {}
+        () = time::sleep(Duration::from_secs(4)) => {}
     }
     assert!(!yielded, "Should not yield before 5s of silence");
 
@@ -66,7 +69,7 @@ async fn trailing_reschedules_on_repeated_trigger() {
     let mut yielded = false;
     tokio::select! {
         _ = debounce.ready() => { yielded = true; }
-        _ = time::sleep(Duration::from_secs(1)) => {}
+        () = time::sleep(Duration::from_secs(1)) => {}
     }
     assert!(!yielded, "Cooldown should have been extended");
 
@@ -86,7 +89,6 @@ async fn done_clears_trigger_flag() {
     assert!(!debounce.is_triggered().await);
 }
 
-
 #[tokio::test(start_paused = true)]
 async fn multiple_triggers_yield_only_once() {
     // Test: Multiple triggers don't cause multiple yields within cooldown
@@ -97,14 +99,44 @@ async fn multiple_triggers_yield_only_once() {
     debounce.trigger();
 
     time::advance(Duration::from_secs(5)).await;
-    debounce.ready().await;
+    let _ = debounce.ready().await;
 
     let mut yielded = false;
     tokio::select! {
         _ = debounce.ready() => { yielded = true; }
-        _ = time::sleep(Duration::from_secs(1)) => {}
+        () = time::sleep(Duration::from_secs(1)) => {}
     }
     assert!(!yielded, "No second yield without new trigger");
 }
 
+#[tokio::test(start_paused = true)]
+async fn trigger_while_guard_held_is_applied_on_drop() {
+    // Test: trigger must not wait on the guard's state lock. On drop the queued
+    // work is replayed at the instant trigger ran, then Drop overwrites it.
+    let debounce = Debouncer::new(Duration::from_secs(5), DebounceMode::Trailing);
+    debounce.trigger();
+    time::advance(Duration::from_secs(5)).await;
 
+    let guard = debounce.ready().await;
+    time::advance(Duration::from_secs(3)).await;
+    debounce.trigger();
+    debounce.trigger();
+    time::advance(Duration::from_secs(4)).await;
+    drop(guard);
+
+    assert!(!debounce.is_triggered().await);
+
+    // Drop replayed the queued triggers at t=8s, then overwrote them at t=12s
+    // (cleared triggered, last_run = drop time). Advancing to the old trigger
+    // cooldown (t=13s) must not yield.
+    time::advance(Duration::from_secs(1)).await;
+    let mut yielded = false;
+    tokio::select! {
+        _ = debounce.ready() => { yielded = true; }
+        () = time::sleep(Duration::from_millis(1)) => {}
+    }
+    assert!(
+        !yielded,
+        "drop overwrote the deferred trigger; it must not become ready"
+    );
+}

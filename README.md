@@ -14,9 +14,8 @@
 * ✅ Asynchronous debounce for event-driven tasks
 * ✅ Leading and trailing debounce strategies
 * ✅ Deterministic, cancel-safe state transitions
-* ✅ Simple, ergonomic API 
+* ✅ Simple, ergonomic API
 * ✅ Fully tested using `tokio::time::pause` for time-based simulation
-* ✅ Feature-flagged `parking_lot` support (enabled by default)
 
 ---
 
@@ -27,7 +26,7 @@ This crate is especially designed for scenarios where you need to debounce jobs 
 **Why use tokio-debouncer for job queues?**
 - Await `debouncer.ready()` inside a `tokio::select!` block to respond to multiple signals (timers, shutdown, new jobs) without missing or double-processing events.
 - Cancel-safe: if your select branch is cancelled, the debounce state is not mutated, so you never lose a job or process too early.
-- Trigger the debouncer from any thread or task; the worker will pick up the work at the right time.
+- Trigger the debouncer from any async task; the worker will pick up the work at the right time.
 
 ---
 
@@ -69,6 +68,7 @@ async fn main() {
 > **Note:**
 > - `ready()` is cancel-safe and does not change internal state.
 > - The debounce state is finalized automatically when the guard is dropped. You do not need to call any method to commit the debounce; simply let the guard go out of scope after acquiring it. This ensures robust, cancellation-safe batching, even if your task is cancelled or panics after acquiring the guard.
+> - The guard holds the state lock until dropped. `trigger` does not wait on that lock; those triggers are applied when the guard drops. Do not call `is_triggered` from the same task while the guard is held.
 
 ---
 
@@ -117,7 +117,7 @@ async fn main() {
 }
 ```
 
-- `debouncer.trigger()` can be called from any thread or task to signal new work.
+- `debouncer.trigger()` can be called from any task to signal new work.
 - The worker loop uses `select!` to wait for either debounce readiness or other events.
 
 ---
@@ -125,20 +125,6 @@ async fn main() {
 ### Best Practice
 
 The debounce state is now finalized automatically when the guard is dropped. You do not need to call any method to commit the debounce; simply let the guard go out of scope after acquiring it. This ensures robust, cancellation-safe batching, even if your task is cancelled or panics after acquiring the guard.
-
----
-
-## ⚙️ Cargo Features
-
-- **`parking_lot`** *(default)*: Use `parking_lot::Mutex` for improved performance and poisoning behavior. Disable with `default-features = false` to use `std::sync::Mutex` instead.
-- **`std`**: (Always enabled) Use standard library features. Present for compatibility with some dependency managers.
-
-Example disabling `parking_lot`:
-
-```toml
-[dependencies]
-tokio-debouncer = { version = "0.3", default-features = false }
-```
 
 ---
 

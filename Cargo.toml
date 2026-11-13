@@ -1,6 +1,6 @@
 [package]
 name = "tokio-debouncer"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
 description = "A minimal async debouncer for signal batching in Tokio"
 repository = "https://github.com/vivsh/tokio-debouncer"
@@ -11,14 +11,6 @@ categories = ["asynchronous", "concurrency", "data-structures"]
 readme = "README.md"
 
 [dependencies]
-tokio = { version = "^1", features = ["sync", "time", "test-util", 
+parking_lot = "0.13.0"
+tokio = { version = "^1", features = ["sync", "time", "test-util",
     "rt", "macros", "rt-multi-thread"] }
-
-[dependencies.parking_lot]
-version = "0.12"
-optional = true
-
-[features]
-default = ["parking_lot"]
-parking_lot = ["dep:parking_lot"]
-
